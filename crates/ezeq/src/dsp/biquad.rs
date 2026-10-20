@@ -38,8 +38,7 @@ impl BiquadCoefficients {
         }
     }
 
-    #[cfg(test)]
-    fn magnitude_at(self, sample_rate: f32, frequency_hz: f32) -> f32 {
+    pub(super) fn magnitude_at(self, sample_rate: f32, frequency_hz: f32) -> f32 {
         let omega = TAU * frequency_hz / sample_rate;
         let (sin_omega, cos_omega) = omega.sin_cos();
         let sin_two_omega = (2.0 * omega).sin();

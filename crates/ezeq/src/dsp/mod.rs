@@ -1,13 +1,12 @@
 mod biquad;
 mod spectrum;
 
-pub(crate) use spectrum::{SpectrumOutput, MIN_DB, SPECTRUM_BINS};
+pub(crate) use spectrum::{spectrum_channel, SpectrumOutput, MIN_DB, SPECTRUM_BINS};
 
 use self::biquad::{Biquad, BiquadCoefficients, CoefficientGenerator};
-use self::spectrum::SpectrumAnalyzer;
+use self::spectrum::SpectrumInput;
 use crate::params::{EqBandParams, EqBandType, EzeqParams, NUM_BANDS};
 use nih_plug::prelude::{Buffer, Smoother, SmoothingStyle};
-use std::sync::Arc;
 
 const MAX_CHANNELS: usize = 2;
 const BYPASS_FADE_MS: f32 = 10.0;
@@ -21,17 +20,17 @@ pub(crate) struct EqEngine {
     max_buffer_size: usize,
     bands: [EqBand; NUM_BANDS],
     global_bypass_fade: LinearFade,
-    analyzer: SpectrumAnalyzer,
+    spectrum_input: SpectrumInput,
 }
 
 impl EqEngine {
-    pub(crate) fn new(spectrum: Arc<SpectrumOutput>) -> Self {
+    pub(crate) fn new(spectrum_input: SpectrumInput) -> Self {
         Self {
             sample_rate: 0.0,
             max_buffer_size: 0,
             bands: std::array::from_fn(|_| EqBand::default()),
             global_bypass_fade: LinearFade::default(),
-            analyzer: SpectrumAnalyzer::new(spectrum),
+            spectrum_input,
         }
     }
 
@@ -49,7 +48,7 @@ impl EqEngine {
         }
         self.global_bypass_fade
             .reset(bool_to_mix(params.bypass.value()));
-        self.analyzer.prepare(sample_rate);
+        self.spectrum_input.prepare(sample_rate);
     }
 
     pub(crate) fn reset(&mut self, params: &EzeqParams) {
@@ -58,7 +57,7 @@ impl EqEngine {
         }
         self.global_bypass_fade
             .reset(bool_to_mix(params.bypass.value()));
-        self.analyzer.reset();
+        self.spectrum_input.reset();
     }
 
     #[inline]
@@ -84,7 +83,7 @@ impl EqEngine {
                 .map(|sample| *sample)
                 .sum::<f32>()
                 * channel_gain;
-            self.analyzer.push_sample(mono_sample);
+            self.spectrum_input.push_sample(mono_sample);
 
             for (band, band_params) in self.bands.iter_mut().zip(params.bands()) {
                 band.update(generator, band_params, self.sample_rate);
@@ -266,6 +265,29 @@ fn coefficients_for_band(
         EqBandType::HighShelf => generator.high_shelf(frequency_hz, q, gain_db),
         EqBandType::LowPass => generator.low_pass(frequency_hz, q),
     }
+}
+
+pub(crate) fn response_magnitude(params: &EzeqParams, sample_rate: f32, frequency_hz: f32) -> f32 {
+    if params.bypass.value() {
+        return 1.0;
+    }
+
+    let generator = CoefficientGenerator::new(sample_rate);
+    params
+        .bands()
+        .into_iter()
+        .filter(|band| band.enabled.value())
+        .map(|band| {
+            coefficients_for_band(
+                generator,
+                band.band_type.value(),
+                band.frequency.value(),
+                band.gain.value(),
+                band.q.value(),
+            )
+            .magnitude_at(sample_rate, frequency_hz)
+        })
+        .product()
 }
 
 #[cfg(test)]

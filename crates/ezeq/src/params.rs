@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 pub(crate) const NUM_BANDS: usize = 8;
 
-const MIN_FREQUENCY_HZ: f32 = 20.0;
-const MAX_FREQUENCY_HZ: f32 = 20_000.0;
-const MIN_GAIN_DB: f32 = -24.0;
-const MAX_GAIN_DB: f32 = 24.0;
+pub(crate) const MIN_FREQUENCY_HZ: f32 = 20.0;
+pub(crate) const MAX_FREQUENCY_HZ: f32 = 20_000.0;
+pub(crate) const MIN_GAIN_DB: f32 = -24.0;
+pub(crate) const MAX_GAIN_DB: f32 = 24.0;
 const MIN_Q: f32 = 0.1;
 const MAX_Q: f32 = 18.0;
 const DEFAULT_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
@@ -170,6 +170,12 @@ pub(crate) enum EqBandType {
     #[id = "low-pass"]
     #[name = "Low Pass"]
     LowPass,
+}
+
+impl EqBandType {
+    pub(crate) const fn uses_gain(self) -> bool {
+        matches!(self, Self::LowShelf | Self::Bell | Self::HighShelf)
+    }
 }
 
 #[cfg(test)]

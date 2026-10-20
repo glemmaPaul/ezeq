@@ -82,8 +82,8 @@ and smooth automated parameters before applying them to filters.
 2. [x] Model EQ bands with permanent, stable parameter IDs.
 3. [x] Smooth gain, frequency, and Q changes without zipper noise.
 4. [x] Add click-free band and global bypass.
-5. Feed an FFT analyzer through a bounded lock-free channel.
-6. Draw and edit the response curve in the editor.
+5. [x] Feed an FFT analyzer through a bounded lock-free channel.
+6. [x] Draw and edit the response curve in the editor.
 7. Add oversampling only where measurements show it is needed.
 8. Validate state migration, automation, mono/stereo operation, and unusual
    host block sizes.

@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 nih_plug.workspace = true
 nih_plug_egui.workspace = true
+rtrb.workspace = true
 
 [lints]
 workspace = true
