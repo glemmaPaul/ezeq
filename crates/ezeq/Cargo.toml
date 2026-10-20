@@ -1,0 +1,20 @@
+[package]
+name = "ezeq"
+description = "A modern parametric equalizer audio plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+nih_plug.workspace = true
+nih_plug_egui.workspace = true
+
+[lints]
+workspace = true
