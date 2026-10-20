@@ -49,6 +49,14 @@ cargo test --workspace
 cargo xtask bundle ezeq
 ```
 
+For quick UI and audio testing without a DAW, run the standalone build:
+
+```sh
+cargo run -p ezeq --release
+```
+
+Use `-- --help` to see CoreAudio input and output device options.
+
 Run debug bundles while developing: NIH-plug's `assert_process_allocs` feature
 will abort processing if the audio callback allocates. Test release bundles
 with a plugin validator and in multiple hosts before distributing them.
@@ -59,7 +67,7 @@ with a plugin validator and in multiple hosts before distributing them.
 crates/ezeq/src/lib.rs      Host formats, channel layouts, lifecycle
 crates/ezeq/src/params.rs   Stable host parameters and persisted state
 crates/ezeq/src/editor.rs   Editor composition and drawing
-crates/ezeq/src/dsp/        Real-time audio processing
+crates/ezeq/src/dsp/        Real-time filters and spectrum analysis
 xtask/                      Cross-platform plugin bundling command
 ```
 
@@ -70,8 +78,8 @@ and smooth automated parameters before applying them to filters.
 
 ## Suggested implementation order
 
-1. Add a tested biquad and coefficient generator.
-2. Model EQ bands with permanent, stable parameter IDs.
+1. [x] Add a tested biquad and coefficient generator.
+2. [x] Model EQ bands with permanent, stable parameter IDs.
 3. Smooth gain, frequency, and Q changes without zipper noise.
 4. Add click-free band and global bypass.
 5. Feed an FFT analyzer through a bounded lock-free channel.

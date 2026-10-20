@@ -7,7 +7,7 @@ mod dsp;
 mod editor;
 mod params;
 
-use dsp::EqEngine;
+use dsp::{EqEngine, SpectrumOutput};
 use nih_plug::prelude::*;
 use params::EzeqParams;
 use std::sync::Arc;
@@ -15,13 +15,17 @@ use std::sync::Arc;
 pub struct Ezeq {
     params: Arc<EzeqParams>,
     engine: EqEngine,
+    spectrum: Arc<SpectrumOutput>,
 }
 
 impl Default for Ezeq {
     fn default() -> Self {
+        let spectrum = Arc::new(SpectrumOutput::default());
+
         Self {
             params: Arc::new(EzeqParams::default()),
-            engine: EqEngine::default(),
+            engine: EqEngine::new(spectrum.clone()),
+            spectrum,
         }
     }
 }
@@ -58,7 +62,7 @@ impl Plugin for Ezeq {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create(self.params.clone())
+        editor::create(self.params.clone(), self.spectrum.clone())
     }
 
     fn initialize(
