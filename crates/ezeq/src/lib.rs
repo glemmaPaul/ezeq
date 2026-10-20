@@ -74,12 +74,13 @@ impl Plugin for Ezeq {
         self.engine.prepare(
             buffer_config.sample_rate,
             buffer_config.max_buffer_size as usize,
+            self.params.as_ref(),
         );
         true
     }
 
     fn reset(&mut self) {
-        self.engine.reset();
+        self.engine.reset(self.params.as_ref());
     }
 
     fn process(
@@ -88,15 +89,14 @@ impl Plugin for Ezeq {
         _aux: &mut AuxiliaryBuffers,
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        self.engine.process(buffer);
+        self.engine.process(buffer, self.params.as_ref());
         ProcessStatus::Normal
     }
 }
 
 impl ClapPlugin for Ezeq {
     const CLAP_ID: &'static str = "com.pauloostenrijk.ezeq";
-    const CLAP_DESCRIPTION: Option<&'static str> =
-        Some("A modern parametric equalizer (pass-through scaffold)");
+    const CLAP_DESCRIPTION: Option<&'static str> = Some("A modern parametric equalizer");
     const CLAP_MANUAL_URL: Option<&'static str> = Some(Self::URL);
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[

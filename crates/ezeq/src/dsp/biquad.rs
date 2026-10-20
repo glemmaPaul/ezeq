@@ -1,7 +1,4 @@
 //! Allocation-free biquad filtering and RBJ-style coefficient generation.
-//!
-//! This module is ready for the EQ-band model but is not connected to the
-//! pass-through engine until those bands and their parameters exist.
 #![allow(dead_code)]
 
 use std::f32::consts::TAU;

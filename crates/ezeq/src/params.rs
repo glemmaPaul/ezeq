@@ -1,6 +1,10 @@
-use nih_plug::prelude::{formatters, BoolParam, Enum, EnumParam, FloatParam, FloatRange, Params};
+use nih_plug::prelude::{
+    formatters, BoolParam, Enum, EnumParam, FloatParam, FloatRange, Params, SmoothingStyle,
+};
 use nih_plug_egui::EguiState;
 use std::sync::Arc;
+
+pub(crate) const NUM_BANDS: usize = 8;
 
 const MIN_FREQUENCY_HZ: f32 = 20.0;
 const MAX_FREQUENCY_HZ: f32 = 20_000.0;
@@ -9,6 +13,7 @@ const MAX_GAIN_DB: f32 = 24.0;
 const MIN_Q: f32 = 0.1;
 const MAX_Q: f32 = 18.0;
 const DEFAULT_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
+const PARAMETER_SMOOTHING_MS: f32 = 20.0;
 
 /// Host-visible and persisted plugin state.
 ///
@@ -19,6 +24,10 @@ const DEFAULT_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
 pub struct EzeqParams {
     #[persist = "editor-state"]
     pub(crate) editor_state: Arc<EguiState>,
+
+    /// Linked to the host's native bypass control when the format supports it.
+    #[id = "bypass"]
+    pub(crate) bypass: BoolParam,
 
     #[nested(id_prefix = "b1", group = "Band 1")]
     pub(crate) band_1: EqBandParams,
@@ -42,6 +51,10 @@ impl Default for EzeqParams {
     fn default() -> Self {
         Self {
             editor_state: EguiState::from_size(900, 560),
+            bypass: BoolParam::new("Bypass", false)
+                .with_value_to_string(formatters::v2s_bool_bypass())
+                .with_string_to_value(formatters::s2v_bool_bypass())
+                .make_bypass(),
             band_1: EqBandParams::new(EqBandType::LowShelf, 80.0),
             band_2: EqBandParams::new(EqBandType::Bell, 160.0),
             band_3: EqBandParams::new(EqBandType::Bell, 320.0),
@@ -51,6 +64,21 @@ impl Default for EzeqParams {
             band_7: EqBandParams::new(EqBandType::Bell, 5_000.0),
             band_8: EqBandParams::new(EqBandType::HighShelf, 10_000.0),
         }
+    }
+}
+
+impl EzeqParams {
+    pub(crate) fn bands(&self) -> [&EqBandParams; NUM_BANDS] {
+        [
+            &self.band_1,
+            &self.band_2,
+            &self.band_3,
+            &self.band_4,
+            &self.band_5,
+            &self.band_6,
+            &self.band_7,
+            &self.band_8,
+        ]
     }
 }
 
@@ -86,6 +114,7 @@ impl EqBandParams {
                     factor: FloatRange::skew_factor(-2.0),
                 },
             )
+            .with_smoother(SmoothingStyle::Logarithmic(PARAMETER_SMOOTHING_MS))
             .with_value_to_string(formatters::v2s_f32_hz_then_khz(1))
             .with_string_to_value(formatters::s2v_f32_hz_then_khz()),
             gain: FloatParam::new(
@@ -96,6 +125,8 @@ impl EqBandParams {
                     max: MAX_GAIN_DB,
                 },
             )
+            // A linear ramp in decibels is a smooth multiplicative change in amplitude.
+            .with_smoother(SmoothingStyle::Linear(PARAMETER_SMOOTHING_MS))
             .with_unit(" dB")
             .with_step_size(0.1)
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
@@ -108,6 +139,7 @@ impl EqBandParams {
                     factor: FloatRange::skew_factor(-1.5),
                 },
             )
+            .with_smoother(SmoothingStyle::Logarithmic(PARAMETER_SMOOTHING_MS))
             .with_step_size(0.01)
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
         }
@@ -143,6 +175,7 @@ pub(crate) enum EqBandType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nih_plug::prelude::{Param, ParamFlags};
 
     #[test]
     fn parameter_ids_are_a_permanent_compatibility_contract() {
@@ -155,11 +188,12 @@ mod tests {
         assert_eq!(
             ids,
             [
-                "b1_on", "b1_type", "b1_freq", "b1_gain", "b1_q", "b2_on", "b2_type", "b2_freq",
-                "b2_gain", "b2_q", "b3_on", "b3_type", "b3_freq", "b3_gain", "b3_q", "b4_on",
-                "b4_type", "b4_freq", "b4_gain", "b4_q", "b5_on", "b5_type", "b5_freq", "b5_gain",
-                "b5_q", "b6_on", "b6_type", "b6_freq", "b6_gain", "b6_q", "b7_on", "b7_type",
-                "b7_freq", "b7_gain", "b7_q", "b8_on", "b8_type", "b8_freq", "b8_gain", "b8_q",
+                "bypass", "b1_on", "b1_type", "b1_freq", "b1_gain", "b1_q", "b2_on", "b2_type",
+                "b2_freq", "b2_gain", "b2_q", "b3_on", "b3_type", "b3_freq", "b3_gain", "b3_q",
+                "b4_on", "b4_type", "b4_freq", "b4_gain", "b4_q", "b5_on", "b5_type", "b5_freq",
+                "b5_gain", "b5_q", "b6_on", "b6_type", "b6_freq", "b6_gain", "b6_q", "b7_on",
+                "b7_type", "b7_freq", "b7_gain", "b7_q", "b8_on", "b8_type", "b8_freq", "b8_gain",
+                "b8_q",
             ]
         );
     }
@@ -190,6 +224,8 @@ mod tests {
 
         assert_eq!(params.band_1.band_type.value(), EqBandType::LowShelf);
         assert_eq!(params.band_8.band_type.value(), EqBandType::HighShelf);
+        assert!(!params.bypass.value());
+        assert!(params.bypass.flags().contains(ParamFlags::BYPASS));
     }
 
     #[test]
@@ -198,5 +234,54 @@ mod tests {
             EqBandType::ids(),
             Some(&["high-pass", "low-shelf", "bell", "high-shelf", "low-pass",][..])
         );
+    }
+
+    #[test]
+    fn continuous_band_parameters_have_short_safe_smoothing_ramps() {
+        let params = EzeqParams::default();
+
+        assert!(matches!(
+            &params.band_1.frequency.smoothed.style,
+            SmoothingStyle::Logarithmic(milliseconds)
+                if *milliseconds == PARAMETER_SMOOTHING_MS
+        ));
+        assert!(matches!(
+            &params.band_1.gain.smoothed.style,
+            SmoothingStyle::Linear(milliseconds) if *milliseconds == PARAMETER_SMOOTHING_MS
+        ));
+        assert!(matches!(
+            &params.band_1.q.smoothed.style,
+            SmoothingStyle::Logarithmic(milliseconds)
+                if *milliseconds == PARAMETER_SMOOTHING_MS
+        ));
+    }
+
+    #[test]
+    fn smoothers_move_gradually_and_reach_their_targets() {
+        let params = EzeqParams::default();
+        let sample_rate = 1_000.0;
+        let steps = PARAMETER_SMOOTHING_MS as usize;
+
+        params.band_1.frequency.smoothed.reset(100.0);
+        params
+            .band_1
+            .frequency
+            .smoothed
+            .set_target(sample_rate, 1_000.0);
+        let first_frequency = params.band_1.frequency.smoothed.next();
+        assert!(first_frequency > 100.0 && first_frequency < 1_000.0);
+        for _ in 1..steps {
+            params.band_1.frequency.smoothed.next();
+        }
+        assert_eq!(params.band_1.frequency.smoothed.next(), 1_000.0);
+
+        params.band_1.gain.smoothed.reset(-12.0);
+        params.band_1.gain.smoothed.set_target(sample_rate, 12.0);
+        let first_gain = params.band_1.gain.smoothed.next();
+        assert!(first_gain > -12.0 && first_gain < 12.0);
+        for _ in 1..steps {
+            params.band_1.gain.smoothed.next();
+        }
+        assert_eq!(params.band_1.gain.smoothed.next(), 12.0);
     }
 }

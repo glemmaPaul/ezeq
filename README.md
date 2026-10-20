@@ -1,7 +1,7 @@
 # Ezeq
 
-Ezeq is a Rust scaffold for a modern parametric EQ plugin. It currently passes
-audio through unchanged and opens a resizable placeholder editor.
+Ezeq is a Rust scaffold for a modern parametric EQ plugin. It provides eight
+smoothed biquad bands and a resizable spectrum-analyzer editor.
 
 ## Formats and framework
 
@@ -80,8 +80,8 @@ and smooth automated parameters before applying them to filters.
 
 1. [x] Add a tested biquad and coefficient generator.
 2. [x] Model EQ bands with permanent, stable parameter IDs.
-3. Smooth gain, frequency, and Q changes without zipper noise.
-4. Add click-free band and global bypass.
+3. [x] Smooth gain, frequency, and Q changes without zipper noise.
+4. [x] Add click-free band and global bypass.
 5. Feed an FFT analyzer through a bounded lock-free channel.
 6. Draw and edit the response curve in the editor.
 7. Add oversampling only where measurements show it is needed.
