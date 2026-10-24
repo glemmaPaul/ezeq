@@ -98,6 +98,21 @@ impl CoefficientGenerator {
         )
     }
 
+    /// Generates a constant 0 dB peak-gain band-pass filter.
+    pub(super) fn band_pass(self, frequency_hz: f32, q: f32) -> BiquadCoefficients {
+        let (sin_omega, cos_omega) = self.sin_cos(frequency_hz);
+        let alpha = sin_omega / (2.0 * sanitize_q(q));
+
+        BiquadCoefficients::normalized(
+            alpha,
+            0.0,
+            -alpha,
+            1.0 + alpha,
+            -2.0 * cos_omega,
+            1.0 - alpha,
+        )
+    }
+
     pub(super) fn peaking(self, frequency_hz: f32, q: f32, gain_db: f32) -> BiquadCoefficients {
         let (sin_omega, cos_omega) = self.sin_cos(frequency_hz);
         let alpha = sin_omega / (2.0 * sanitize_q(q));
@@ -277,12 +292,54 @@ mod tests {
     const SAMPLE_RATE: f32 = 48_000.0;
     const TEST_FREQUENCY: f32 = 1_000.0;
     const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    const MAX_ACCEPTABLE_THD_PLUS_NOISE_DB: f64 = -90.0;
 
     fn assert_close(actual: f32, expected: f32, tolerance: f32) {
         assert!(
             (actual - expected).abs() <= tolerance,
             "expected {expected}, got {actual}"
         );
+    }
+
+    fn measure_thd_plus_noise_db(
+        coefficients: BiquadCoefficients,
+        sample_rate: f32,
+        frequency_hz: f32,
+    ) -> f64 {
+        let mut filter = Biquad::new(coefficients);
+        let frame_count = sample_rate as usize;
+        let angular_frequency =
+            std::f64::consts::TAU * f64::from(frequency_hz) / f64::from(sample_rate);
+        let mut output_sum = 0.0;
+        let mut output_energy = 0.0;
+        let mut sine_projection = 0.0;
+        let mut cosine_projection = 0.0;
+
+        // The first second lets the filter settle. Integer test frequencies and
+        // a one-second measurement window make the fundamental coherent.
+        for index in 0..frame_count * 2 {
+            let phase = angular_frequency * index as f64;
+            let (sine, cosine) = phase.sin_cos();
+            let output = f64::from(filter.process_sample(sine as f32));
+
+            if index >= frame_count {
+                output_sum += output;
+                output_energy += output * output;
+                sine_projection += output * sine;
+                cosine_projection += output * cosine;
+            }
+        }
+
+        let inverse_frame_count = 1.0 / frame_count as f64;
+        let mean = output_sum * inverse_frame_count;
+        let total_power = output_energy * inverse_frame_count;
+        let fundamental_sine = 2.0 * sine_projection * inverse_frame_count;
+        let fundamental_cosine = 2.0 * cosine_projection * inverse_frame_count;
+        let fundamental_power =
+            (fundamental_sine * fundamental_sine + fundamental_cosine * fundamental_cosine) * 0.5;
+        let residual_power = (total_power - mean * mean - fundamental_power).max(f64::MIN_POSITIVE);
+
+        10.0 * (residual_power / fundamental_power).log10()
     }
 
     #[test]
@@ -328,6 +385,20 @@ mod tests {
             1.0,
             0.0001,
         );
+    }
+
+    #[test]
+    fn band_pass_peaks_at_its_center_frequency() {
+        let coefficients =
+            CoefficientGenerator::new(SAMPLE_RATE).band_pass(TEST_FREQUENCY, BUTTERWORTH_Q);
+
+        assert_close(
+            coefficients.magnitude_at(SAMPLE_RATE, TEST_FREQUENCY),
+            1.0,
+            0.0001,
+        );
+        assert!(coefficients.magnitude_at(SAMPLE_RATE, 20.0) < 0.05);
+        assert!(coefficients.magnitude_at(SAMPLE_RATE, 20_000.0) < 0.05);
     }
 
     #[test]
@@ -382,6 +453,46 @@ mod tests {
 
         let measured_gain = (output_energy / input_energy).sqrt() as f32;
         assert_close(measured_gain, 10.0_f32.powf(6.0 / 20.0), 0.001);
+    }
+
+    #[test]
+    fn supported_filters_do_not_need_oversampling_for_distortion() {
+        for sample_rate in [44_100.0, 48_000.0, 96_000.0] {
+            let generator = CoefficientGenerator::new(sample_rate);
+            let upper_test_frequency = if sample_rate == 44_100.0 {
+                20_000.0
+            } else {
+                21_000.0
+            };
+            let measurements = [
+                ("high pass", generator.high_pass(10_000.0, 18.0), 10_000.0),
+                (
+                    "low shelf",
+                    generator.low_shelf(10_000.0, 1.0, 24.0),
+                    upper_test_frequency,
+                ),
+                (
+                    "bell",
+                    generator.peaking(upper_test_frequency, 18.0, 24.0),
+                    upper_test_frequency,
+                ),
+                (
+                    "high shelf",
+                    generator.high_shelf(10_000.0, 1.0, 24.0),
+                    upper_test_frequency,
+                ),
+                ("low pass", generator.low_pass(10_000.0, 18.0), 10_000.0),
+            ];
+
+            for (name, coefficients, frequency_hz) in measurements {
+                let measured_db =
+                    measure_thd_plus_noise_db(coefficients, sample_rate, frequency_hz);
+                assert!(
+                    measured_db <= MAX_ACCEPTABLE_THD_PLUS_NOISE_DB,
+                    "{name} at {sample_rate} Hz measured {measured_db:.1} dB THD+N"
+                );
+            }
+        }
     }
 
     #[test]

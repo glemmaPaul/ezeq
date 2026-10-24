@@ -7,7 +7,7 @@ mod dsp;
 mod editor;
 mod params;
 
-use dsp::{spectrum_channel, EqEngine, SpectrumOutput};
+use dsp::{spectrum_channel, DynamicsOutput, EqEngine, SpectrumOutput};
 use nih_plug::prelude::*;
 use params::EzeqParams;
 use std::sync::Arc;
@@ -16,24 +16,27 @@ pub struct Ezeq {
     params: Arc<EzeqParams>,
     engine: EqEngine,
     spectrum: Arc<SpectrumOutput>,
+    dynamics: Arc<DynamicsOutput>,
 }
 
 impl Default for Ezeq {
     fn default() -> Self {
         let (spectrum_input, spectrum_output) = spectrum_channel();
         let spectrum = Arc::new(spectrum_output);
+        let dynamics = Arc::new(DynamicsOutput::default());
 
         Self {
             params: Arc::new(EzeqParams::default()),
-            engine: EqEngine::new(spectrum_input),
+            engine: EqEngine::new(spectrum_input, dynamics.clone()),
             spectrum,
+            dynamics,
         }
     }
 }
 
 impl Plugin for Ezeq {
-    const NAME: &'static str = "Ezeq";
-    const VENDOR: &'static str = "Ezeq Audio";
+    const NAME: &'static str = "EzEq";
+    const VENDOR: &'static str = "EzEq Audio";
     const URL: &'static str = env!("CARGO_PKG_REPOSITORY");
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
@@ -42,11 +45,13 @@ impl Plugin for Ezeq {
         AudioIOLayout {
             main_input_channels: NonZeroU32::new(2),
             main_output_channels: NonZeroU32::new(2),
+            aux_input_ports: &[new_nonzero_u32(2)],
             ..AudioIOLayout::const_default()
         },
         AudioIOLayout {
             main_input_channels: NonZeroU32::new(1),
             main_output_channels: NonZeroU32::new(1),
+            aux_input_ports: &[new_nonzero_u32(1)],
             ..AudioIOLayout::const_default()
         },
     ];
@@ -63,7 +68,11 @@ impl Plugin for Ezeq {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create(self.params.clone(), self.spectrum.clone())
+        editor::create(
+            self.params.clone(),
+            self.spectrum.clone(),
+            self.dynamics.clone(),
+        )
     }
 
     fn initialize(
@@ -87,10 +96,11 @@ impl Plugin for Ezeq {
     fn process(
         &mut self,
         buffer: &mut Buffer,
-        _aux: &mut AuxiliaryBuffers,
+        aux: &mut AuxiliaryBuffers,
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        self.engine.process(buffer, self.params.as_ref());
+        self.engine
+            .process(buffer, aux.inputs.first(), self.params.as_ref());
         ProcessStatus::Normal
     }
 }
@@ -117,3 +127,32 @@ impl Vst3Plugin for Ezeq {
 
 nih_export_clap!(Ezeq);
 nih_export_vst3!(Ezeq);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const _: () = assert!(Ezeq::SAMPLE_ACCURATE_AUTOMATION);
+
+    #[test]
+    fn advertises_mono_and_stereo_layouts() {
+        assert_eq!(Ezeq::AUDIO_IO_LAYOUTS.len(), 2);
+
+        let channel_counts: Vec<(u32, u32)> = Ezeq::AUDIO_IO_LAYOUTS
+            .iter()
+            .map(|layout| {
+                (
+                    layout.main_input_channels.unwrap().get(),
+                    layout.main_output_channels.unwrap().get(),
+                )
+            })
+            .collect();
+        assert_eq!(channel_counts, [(2, 2), (1, 1)]);
+
+        let sidechain_channels: Vec<u32> = Ezeq::AUDIO_IO_LAYOUTS
+            .iter()
+            .map(|layout| layout.aux_input_ports[0].get())
+            .collect();
+        assert_eq!(sidechain_channels, [2, 1]);
+    }
+}

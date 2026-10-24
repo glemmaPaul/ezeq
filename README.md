@@ -13,6 +13,13 @@ smoothed biquad bands and a resizable spectrum-analyzer editor.
 NIH-plug is pinned to a commit so builds stay reproducible. The Rust toolchain
 is also pinned so the resolved dependency graph builds consistently.
 
+`nih_plug_egui` is taken from the
+[egui-baseview](https://github.com/BillyDM/egui-baseview) repository instead of
+NIH-plug. That version only captures keyboard input when egui needs it (for
+example a focused text field) and otherwise passes key events on to the host,
+so DAW shortcuts and Ableton's computer MIDI keyboard keep working while the
+editor is open. Its pinned NIH-plug commit must match the one in `Cargo.toml`.
+
 ## Build
 
 Install [Rust via rustup](https://rustup.rs/), then run:
@@ -84,9 +91,42 @@ and smooth automated parameters before applying them to filters.
 4. [x] Add click-free band and global bypass.
 5. [x] Feed an FFT analyzer through a bounded lock-free channel.
 6. [x] Draw and edit the response curve in the editor.
-7. Add oversampling only where measurements show it is needed.
-8. Validate state migration, automation, mono/stereo operation, and unusual
-   host block sizes.
+7. [x] Measure before adding oversampling. High-frequency THD+N stays below
+   -90 dB for every filter type at 44.1, 48, and 96 kHz, so the current linear
+   signal path does not use oversampling.
+8. [x] Validate state migration, smoothed automation, mono/stereo channel
+   isolation, and host blocks from empty and single-sample buffers through
+   blocks larger than the configured maximum.
+
+## Dynamic EQ and sidechain roadmap
+
+Each plugin instance will expose one mono/stereo external sidechain bus. All
+bands may use that shared signal, with an independent frequency-selective
+detector for each band. Projects that need different sidechain sources for
+different bands should use multiple Ezeq instances.
+
+NIH-plug presents an unconnected sidechain as silence. External sidechain
+routing therefore needs to be tested in a VST3/CLAP host; the CoreAudio/CPAL
+standalone build cannot receive a separate sidechain signal (the JACK backend
+can).
+
+1. [x] Declare the sidechain bus in the mono and stereo audio layouts and pass
+   the host-provided auxiliary buffer into the DSP engine.
+2. [x] Add stable per-band parameters for dynamic range, threshold,
+   attack/release, and internal or external trigger selection.
+3. [x] Implement a band-limited detector that follows each band's frequency and
+   Q, with a linked and predictable response for mono and stereo sidechains.
+4. [x] Add a real-time-safe envelope follower and compression/expansion curve
+   that modulates band gain without clicks or per-block allocations.
+5. [x] Keep the sidechain signal detector-only: it must never be mixed into the
+   main output, and missing sidechain input must fail safely.
+6. [x] Show per-band dynamic range and live gain reduction in the editor, with
+   sidechain audition or spectrum visualization as a later enhancement.
+7. [x] Test internal and external triggering, silence and disconnected
+   sidechains, automation, mono/stereo layouts, unusual block sizes, reset
+   behavior, and state migration.
+8. [ ] Validate sidechain routing and restored sessions in representative VST3
+   and CLAP hosts.
 
 The VST3 class ID and published parameter IDs are session compatibility
 contracts. Do not change them after releasing the plugin.

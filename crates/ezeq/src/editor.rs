@@ -1,4 +1,9 @@
-use crate::dsp::{response_magnitude, SpectrumOutput, MIN_DB, SPECTRUM_BINS};
+mod dynamics;
+
+use crate::dsp::{
+    response_magnitude, response_magnitude_with_dynamic, DynamicsOutput, SpectrumOutput, MIN_DB,
+    SPECTRUM_BINS,
+};
 use crate::params::{
     EzeqParams, MAX_FREQUENCY_HZ, MAX_GAIN_DB, MIN_FREQUENCY_HZ, MIN_GAIN_DB, NUM_BANDS,
 };
@@ -9,7 +14,10 @@ use nih_plug_egui::{
     resizable_window::ResizableWindow,
     widgets,
 };
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 const BACKGROUND: Color32 = Color32::from_rgb(17, 20, 24);
 const PANEL: Color32 = Color32::from_rgb(24, 29, 35);
@@ -19,31 +27,38 @@ const SPECTRUM_FILL: Color32 = Color32::from_rgba_premultiplied(10, 29, 24, 35);
 const AXIS_TEXT: Color32 = Color32::from_rgb(139, 149, 159);
 const DISABLED_BAND: Color32 = Color32::from_rgb(91, 101, 111);
 const RESPONSE: Color32 = Color32::from_rgb(241, 195, 89);
+const DYNAMIC_RESPONSE: Color32 = Color32::from_rgba_premultiplied(72, 58, 27, 76);
+const DYNAMIC_DISPLAY_ATTACK_SECONDS: f32 = 0.14;
+const DYNAMIC_DISPLAY_RELEASE_SECONDS: f32 = 0.42;
 
 #[derive(Default)]
 struct EditorState {
     selected_band: usize,
     dragging_band: Option<usize>,
     dragging_gain: bool,
+    displayed_dynamic_gains: [f32; NUM_BANDS],
+    last_dynamic_update: Option<Instant>,
 }
 
 pub(crate) fn create(
     params: Arc<EzeqParams>,
     spectrum: Arc<SpectrumOutput>,
+    dynamics_output: Arc<DynamicsOutput>,
 ) -> Option<Box<dyn Editor>> {
     let editor_state = params.editor_state.clone();
 
     create_egui_editor(
         params.editor_state.clone(),
         EditorState::default(),
-        |context, _state| {
+        Default::default(),
+        |context, _queue, _state| {
             let mut visuals = egui::Visuals::dark();
             visuals.panel_fill = BACKGROUND;
             visuals.window_fill = BACKGROUND;
             visuals.override_text_color = Some(Color32::from_rgb(224, 229, 234));
             context.set_visuals(visuals);
         },
-        move |context, setter, state| {
+        move |context, setter, _queue, state| {
             ResizableWindow::new("ezeq-editor")
                 .min_size(Vec2::new(640.0, 400.0))
                 .show(context, editor_state.as_ref(), |ui| {
@@ -75,7 +90,7 @@ pub(crate) fn create(
 
                             let desired_size = Vec2::new(
                                 ui.available_width(),
-                                (ui.available_height() - 86.0).max(240.0),
+                                (ui.available_height() - 112.0).max(240.0),
                             );
                             let (response, painter) =
                                 ui.allocate_painter(desired_size, egui::Sense::click_and_drag());
@@ -154,6 +169,9 @@ pub(crate) fn create(
                                 AXIS_TEXT,
                             );
 
+                            let dynamic_targets = dynamics_output.snapshot();
+                            update_dynamic_display(state, dynamic_targets, Instant::now());
+                            let dynamic_gains = state.displayed_dynamic_gains;
                             let handle_positions = std::array::from_fn(|index| {
                                 let band = params.bands()[index];
                                 let gain_db = if band.band_type.value().uses_gain() {
@@ -258,6 +276,10 @@ pub(crate) fn create(
 
                             let sample_rate = spectrum.sample_rate();
                             let mut response_points = Vec::with_capacity(SPECTRUM_BINS);
+                            let show_dynamic_response =
+                                dynamic_gains.iter().any(|gain| gain.abs() >= 0.01);
+                            let mut dynamic_response_points =
+                                show_dynamic_response.then(|| Vec::with_capacity(SPECTRUM_BINS));
                             for index in 0..SPECTRUM_BINS {
                                 let normalized = index as f32 / (SPECTRUM_BINS - 1) as f32;
                                 let frequency = MIN_FREQUENCY_HZ
@@ -270,13 +292,49 @@ pub(crate) fn create(
                                     frequency_x(plot_rect, frequency),
                                     gain_y(plot_rect, gain_db),
                                 ));
+                                if let Some(points) = dynamic_response_points.as_mut() {
+                                    let dynamic_magnitude = response_magnitude_with_dynamic(
+                                        params.as_ref(),
+                                        sample_rate,
+                                        frequency,
+                                        &dynamic_gains,
+                                    );
+                                    let dynamic_gain_db = (20.0
+                                        * dynamic_magnitude.max(1.0e-6).log10())
+                                    .clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+                                    points.push(Pos2::new(
+                                        frequency_x(plot_rect, frequency),
+                                        gain_y(plot_rect, dynamic_gain_db),
+                                    ));
+                                }
+                            }
+                            if let Some(points) = dynamic_response_points {
+                                painter.add(Shape::line(
+                                    points,
+                                    Stroke::new(2.0_f32, DYNAMIC_RESPONSE),
+                                ));
                             }
                             painter
                                 .add(Shape::line(response_points, Stroke::new(2.2_f32, RESPONSE)));
 
                             for (index, position) in handle_positions.into_iter().enumerate() {
-                                let enabled = params.bands()[index].enabled.value();
+                                let band = params.bands()[index];
+                                let enabled = band.enabled.value();
                                 let color = if enabled { ACCENT } else { DISABLED_BAND };
+                                if enabled
+                                    && band.dynamic_enabled.value()
+                                    && dynamic_gains[index].abs() >= 0.01
+                                {
+                                    let dynamic_position = Pos2::new(
+                                        position.x,
+                                        gain_y(plot_rect, band.gain.value() + dynamic_gains[index]),
+                                    );
+                                    painter.line_segment(
+                                        [position, dynamic_position],
+                                        Stroke::new(2.0_f32, RESPONSE),
+                                    );
+                                    painter.circle_filled(dynamic_position, 3.5, RESPONSE);
+                                }
                                 painter.circle_filled(position, 7.0, color);
                                 painter.text(
                                     position,
@@ -345,6 +403,12 @@ pub(crate) fn create(
                                     widgets::ParamSlider::for_param(&band.q, setter),
                                 );
                             });
+                            dynamics::controls(
+                                ui,
+                                setter,
+                                band,
+                                dynamic_gains[state.selected_band],
+                            );
 
                             context.request_repaint_after(Duration::from_millis(16));
                         });
@@ -386,4 +450,26 @@ fn closest_handle(pointer: Pos2, handles: &[Pos2; NUM_BANDS]) -> Option<usize> {
         .filter(|(_, distance)| *distance <= 18.0)
         .min_by(|(_, left), (_, right)| left.total_cmp(right))
         .map(|(index, _)| index)
+}
+
+fn update_dynamic_display(state: &mut EditorState, targets: [f32; NUM_BANDS], now: Instant) {
+    let elapsed_seconds = state
+        .last_dynamic_update
+        .replace(now)
+        .map(|previous| now.saturating_duration_since(previous).as_secs_f32())
+        .unwrap_or(1.0 / 60.0)
+        .clamp(0.0, 0.1);
+
+    for (displayed, target) in state.displayed_dynamic_gains.iter_mut().zip(targets) {
+        let time_seconds = if target.abs() > displayed.abs() {
+            DYNAMIC_DISPLAY_ATTACK_SECONDS
+        } else {
+            DYNAMIC_DISPLAY_RELEASE_SECONDS
+        };
+        let blend = 1.0 - (-elapsed_seconds / time_seconds).exp();
+        *displayed += (target - *displayed) * blend;
+        if target.abs() < 0.001 && displayed.abs() < 0.001 {
+            *displayed = 0.0;
+        }
+    }
 }

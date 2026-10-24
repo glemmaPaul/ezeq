@@ -12,8 +12,13 @@ authors = ["Ezeq contributors"]
 repository = "https://github.com/pauloostenrijk/ezeq"
 
 [workspace.dependencies]
-nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683", features = ["assert_process_allocs", "standalone"] }
-nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }
+# `nih_plug_egui` comes from the egui-baseview repository rather than nih-plug itself: that
+# version only captures keyboard events when egui actually wants them (e.g. a focused text
+# field) and otherwise lets them through to the host, so things like Ableton's computer MIDI
+# keyboard keep working while the editor is open. The nih_plug rev must match the one that
+# crate pins, otherwise two copies of nih_plug end up in the dependency graph.
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "28b149ec4d62757d0b448809148a0c3ca6e09a95", features = ["assert_process_allocs", "standalone"] }
+nih_plug_egui = { git = "https://github.com/BillyDM/egui-baseview.git", rev = "11f487fe915d6208961064e619474b98f971594a" }
 rtrb = "0.2"
 
 [workspace.lints.rust]
