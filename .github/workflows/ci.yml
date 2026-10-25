@@ -15,12 +15,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same system packages nih-plug's own CI installs for baseview (X11/XCB),
+      # OpenGL, and the ALSA/JACK standalone backends.
       - name: Install Linux GUI and audio dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
-            pkg-config libgl1-mesa-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev \
-            libasound2-dev libjack-jackd2-dev
+            pkg-config libgl-dev libasound2-dev libjack-jackd2-dev \
+            libx11-xcb-dev libxcb1-dev libxcb-dri2-0-dev libxcb-icccm4-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev libxcursor-dev libxkbcommon-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
