@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches: ["**"]
+    tags: ["v*"]
   pull_request:
 
 permissions:
@@ -35,3 +37,75 @@ jobs:
 
       - name: Build plugin bundles
         run: cargo xtask bundle ezeq --release
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+            targets: x86_64-pc-windows-msvc
+            command: cargo xtask bundle ezeq --release
+            files: Ezeq.vst3 Ezeq.clap Ezeq.exe
+          - name: macos-universal
+            os: macos-latest
+            targets: x86_64-apple-darwin,aarch64-apple-darwin
+            command: cargo xtask bundle-universal ezeq --release
+            files: Ezeq.vst3 Ezeq.clap Ezeq.app
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build plugin bundles
+        run: ${{ matrix.command }}
+
+      - name: Package bundles
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${GITHUB_SHA::8}"
+          fi
+          archive="ezeq-${version}-${{ matrix.name }}.zip"
+          mkdir -p dist
+          cd target/bundled
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            7z a "../../dist/${archive}" ${{ matrix.files }}
+          else
+            # -y keeps symlinks inside the .app/.vst3 bundles intact.
+            zip -ry "../../dist/${archive}" ${{ matrix.files }}
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ezeq-${{ matrix.name }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ezeq-*
+          merge-multiple: true
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
