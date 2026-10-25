@@ -43,9 +43,32 @@ cp -R target/bundled/Ezeq.vst3 ~/Library/Audio/Plug-Ins/VST3/
 cp -R target/bundled/Ezeq.clap ~/Library/Audio/Plug-Ins/CLAP/
 ```
 
+On Windows, run the same `cargo xtask bundle ezeq --release` with the MSVC
+toolchain (install the Visual Studio Build Tools with "Desktop development with
+C++" first) and copy the bundles to:
+
+```text
+C:\Program Files\Common Files\VST3\Ezeq.vst3
+C:\Program Files\Common Files\CLAP\Ezeq.clap
+```
+
 Rescan plugins in the DAW after installation. During development, a symlink
 from those plugin directories to `target/bundled` is faster than copying after
 every build.
+
+## Releases
+
+CI builds Windows (x86_64) and macOS (universal) bundles on every push and
+uploads them as workflow artifacts. Pushing a `v*` tag additionally publishes a
+GitHub release with the zipped bundles attached:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The macOS bundles are ad-hoc signed but not notarized, so Gatekeeper will warn
+on first launch until the plugin is signed with a Developer ID.
 
 ## Development
 

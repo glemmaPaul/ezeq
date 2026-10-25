@@ -28,8 +28,22 @@ const AXIS_TEXT: Color32 = Color32::from_rgb(139, 149, 159);
 const DISABLED_BAND: Color32 = Color32::from_rgb(91, 101, 111);
 const RESPONSE: Color32 = Color32::from_rgb(241, 195, 89);
 const DYNAMIC_RESPONSE: Color32 = Color32::from_rgba_premultiplied(72, 58, 27, 76);
+const DYNAMIC_ARROW_LIT: Color32 = Color32::from_rgb(150, 158, 166);
+const DYNAMIC_ARROW_DIM: Color32 = Color32::from_rgba_premultiplied(40, 45, 51, 90);
 const DYNAMIC_DISPLAY_ATTACK_SECONDS: f32 = 0.14;
 const DYNAMIC_DISPLAY_RELEASE_SECONDS: f32 = 0.42;
+/// Smoothing for the reactive curve: continuous, but without frame-level jitter.
+const DYNAMIC_CURVE_SMOOTHING_SECONDS: f32 = 0.09;
+/// Vertical distance between arrows in the dynamic gain column.
+const DYNAMIC_ARROW_SPACING: f32 = 7.0;
+const DYNAMIC_ARROW_HALF_WIDTH: f32 = 5.0;
+const DYNAMIC_ARROW_HEIGHT: f32 = 3.5;
+/// Slow idle drift so the column never looks frozen.
+const DYNAMIC_ARROW_IDLE_SPEED_PX_PER_SECOND: f32 = 6.0;
+/// Fixed scroll speed used while the dynamic gain change is growing.
+const DYNAMIC_ARROW_SPEED_PX_PER_SECOND: f32 = 42.0;
+/// Growth below this is treated as steady so noise never animates the arrows.
+const DYNAMIC_ARROW_RISE_THRESHOLD_DB: f32 = 0.05;
 
 #[derive(Default)]
 struct EditorState {
@@ -37,6 +51,8 @@ struct EditorState {
     dragging_band: Option<usize>,
     dragging_gain: bool,
     displayed_dynamic_gains: [f32; NUM_BANDS],
+    curve_dynamic_gains: [f32; NUM_BANDS],
+    dynamic_arrow_phases: [f32; NUM_BANDS],
     last_dynamic_update: Option<Instant>,
 }
 
@@ -169,9 +185,12 @@ pub(crate) fn create(
                                 AXIS_TEXT,
                             );
 
+                            // The reactive curve and the arrows each follow the audio-thread
+                            // gains through their own smoothing so neither paces the other.
                             let dynamic_targets = dynamics_output.snapshot();
                             update_dynamic_display(state, dynamic_targets, Instant::now());
                             let dynamic_gains = state.displayed_dynamic_gains;
+                            let curve_gains = state.curve_dynamic_gains;
                             let handle_positions = std::array::from_fn(|index| {
                                 let band = params.bands()[index];
                                 let gain_db = if band.band_type.value().uses_gain() {
@@ -277,7 +296,7 @@ pub(crate) fn create(
                             let sample_rate = spectrum.sample_rate();
                             let mut response_points = Vec::with_capacity(SPECTRUM_BINS);
                             let show_dynamic_response =
-                                dynamic_gains.iter().any(|gain| gain.abs() >= 0.01);
+                                curve_gains.iter().any(|gain| gain.abs() >= 0.01);
                             let mut dynamic_response_points =
                                 show_dynamic_response.then(|| Vec::with_capacity(SPECTRUM_BINS));
                             for index in 0..SPECTRUM_BINS {
@@ -297,7 +316,7 @@ pub(crate) fn create(
                                         params.as_ref(),
                                         sample_rate,
                                         frequency,
-                                        &dynamic_gains,
+                                        &curve_gains,
                                     );
                                     let dynamic_gain_db = (20.0
                                         * dynamic_magnitude.max(1.0e-6).log10())
@@ -321,19 +340,20 @@ pub(crate) fn create(
                                 let band = params.bands()[index];
                                 let enabled = band.enabled.value();
                                 let color = if enabled { ACCENT } else { DISABLED_BAND };
-                                if enabled
+                                if state.selected_band == index
+                                    && enabled
                                     && band.dynamic_enabled.value()
-                                    && dynamic_gains[index].abs() >= 0.01
+                                    && band.band_type.value().uses_gain()
                                 {
-                                    let dynamic_position = Pos2::new(
+                                    draw_dynamic_arrows(
+                                        &painter,
+                                        plot_rect,
                                         position.x,
-                                        gain_y(plot_rect, band.gain.value() + dynamic_gains[index]),
+                                        band.gain.value(),
+                                        band.dynamic_range.value(),
+                                        dynamic_gains[index],
+                                        state.dynamic_arrow_phases[index],
                                     );
-                                    painter.line_segment(
-                                        [position, dynamic_position],
-                                        Stroke::new(2.0_f32, RESPONSE),
-                                    );
-                                    painter.circle_filled(dynamic_position, 3.5, RESPONSE);
                                 }
                                 painter.circle_filled(position, 7.0, color);
                                 painter.text(
@@ -460,8 +480,22 @@ fn update_dynamic_display(state: &mut EditorState, targets: [f32; NUM_BANDS], no
         .unwrap_or(1.0 / 60.0)
         .clamp(0.0, 0.1);
 
-    for (displayed, target) in state.displayed_dynamic_gains.iter_mut().zip(targets) {
-        let time_seconds = if target.abs() > displayed.abs() {
+    let curve_blend = 1.0 - (-elapsed_seconds / DYNAMIC_CURVE_SMOOTHING_SECONDS).exp();
+    for (curve, target) in state.curve_dynamic_gains.iter_mut().zip(targets) {
+        *curve += (target - *curve) * curve_blend;
+        if target.abs() < 0.001 && curve.abs() < 0.001 {
+            *curve = 0.0;
+        }
+    }
+
+    for ((displayed, phase), target) in state
+        .displayed_dynamic_gains
+        .iter_mut()
+        .zip(state.dynamic_arrow_phases.iter_mut())
+        .zip(targets)
+    {
+        let rising = target.abs() > displayed.abs() + DYNAMIC_ARROW_RISE_THRESHOLD_DB;
+        let time_seconds = if rising {
             DYNAMIC_DISPLAY_ATTACK_SECONDS
         } else {
             DYNAMIC_DISPLAY_RELEASE_SECONDS
@@ -471,5 +505,73 @@ fn update_dynamic_display(state: &mut EditorState, targets: [f32; NUM_BANDS], no
         if target.abs() < 0.001 && displayed.abs() < 0.001 {
             *displayed = 0.0;
         }
+
+        // The arrows drift slowly at rest and move at a fixed faster speed
+        // only while the gain change is still growing.
+        let speed = if rising {
+            DYNAMIC_ARROW_SPEED_PX_PER_SECOND
+        } else {
+            DYNAMIC_ARROW_IDLE_SPEED_PX_PER_SECOND
+        };
+        *phase = (*phase + speed * elapsed_seconds) % DYNAMIC_ARROW_SPACING;
+    }
+}
+
+/// Draws a column of chevrons from a band handle towards its dynamic range.
+///
+/// The chevrons point in the direction of the range (up for expansion, down
+/// for compression), light up as far as the current gain change, and scroll
+/// by `phase` pixels in that direction. Arrows fade in at the handle and fade
+/// out past the end of the range instead of popping.
+fn draw_dynamic_arrows(
+    painter: &egui::Painter,
+    plot_rect: Rect,
+    x: f32,
+    static_gain_db: f32,
+    range_db: f32,
+    dynamic_gain_db: f32,
+    phase: f32,
+) {
+    if range_db.abs() < 0.01 {
+        return;
+    }
+
+    // Positive range moves the gain up, which is towards smaller `y`.
+    let step_y = -range_db.signum();
+    let start_y = gain_y(plot_rect, static_gain_db);
+    let length = (gain_y(plot_rect, static_gain_db + range_db) - start_y).abs();
+    if length < DYNAMIC_ARROW_SPACING {
+        return;
+    }
+    let lit_length = (gain_y(plot_rect, static_gain_db + dynamic_gain_db) - start_y)
+        .abs()
+        .min(length);
+
+    let mut distance = phase;
+    while distance <= length + DYNAMIC_ARROW_SPACING {
+        let y = start_y + step_y * distance;
+        if y >= plot_rect.top() && y <= plot_rect.bottom() {
+            let tip_y = y + step_y * DYNAMIC_ARROW_HEIGHT * 0.5;
+            let tail_y = y - step_y * DYNAMIC_ARROW_HEIGHT * 0.5;
+            let base_color = if distance <= lit_length {
+                DYNAMIC_ARROW_LIT
+            } else {
+                DYNAMIC_ARROW_DIM
+            };
+            // Fade in over the first spacing and out over the last one.
+            let fade_in = distance / DYNAMIC_ARROW_SPACING;
+            let fade_out = (length + DYNAMIC_ARROW_SPACING - distance) / DYNAMIC_ARROW_SPACING;
+            let alpha = fade_in.min(fade_out).clamp(0.0, 1.0);
+            let color = base_color.gamma_multiply(alpha);
+            painter.add(Shape::line(
+                vec![
+                    Pos2::new(x - DYNAMIC_ARROW_HALF_WIDTH, tail_y),
+                    Pos2::new(x, tip_y),
+                    Pos2::new(x + DYNAMIC_ARROW_HALF_WIDTH, tail_y),
+                ],
+                Stroke::new(1.6_f32, color),
+            ));
+        }
+        distance += DYNAMIC_ARROW_SPACING;
     }
 }

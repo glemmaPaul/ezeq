@@ -341,6 +341,8 @@ pub(crate) fn response_magnitude(params: &EzeqParams, sample_rate: f32, frequenc
     response_magnitude_with_dynamic(params, sample_rate, frequency_hz, &[0.0; NUM_BANDS])
 }
 
+/// Response magnitude with a per-band dynamic gain offset applied to the
+/// gain-based bands. Used to draw the live, reactive EQ curve.
 pub(crate) fn response_magnitude_with_dynamic(
     params: &EzeqParams,
     sample_rate: f32,
