@@ -15,10 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux GUI dependencies
+      - name: Install Linux GUI and audio dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libgl1-mesa-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev
+          sudo apt-get install --yes \
+            pkg-config libgl1-mesa-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev \
+            libasound2-dev libjack-jackd2-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
